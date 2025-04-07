@@ -1,34 +1,33 @@
-#include <ntifs.h>
+#include <Ntifs.h>
 #include <ntddk.h>
 #include <wdf.h>
 
 // Global variables
-UNICODE_STRING DEVICE_NAME = RTL_CONSTANT_STRING(L"\\Device\\MyFirstDriver"); // Driver device name
-UNICODE_STRING SYM_LINK = RTL_CONSTANT_STRING(L"\\??\\MyFirstDriver");        // Device symlink
-
+UNICODE_STRING DEVICE_NAME = RTL_CONSTANT_STRING(L"\\Device\\MyProcessMonitor"); // Driver device name
+UNICODE_STRING SYM_LINK = RTL_CONSTANT_STRING(L"\\??\\MyProcessMonitor");        // Device symlink
+// handle incoming notifications about new/terminated processes
 // Callback for process creation notification
 void CreateProcessNotifyRoutine(PEPROCESS process, HANDLE pid, PPS_CREATE_NOTIFY_INFO createInfo) {
     UNREFERENCED_PARAMETER(process);
     UNREFERENCED_PARAMETER(pid);
 
     // Check for process creation (not exit)
-    if (createInfo != NULL && createInfo->CommandLine != NULL) {
-        if (wcsstr(createInfo->CommandLine->Buffer, L"notepad") != NULL) {
-            DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL,
-                "MyDumbEDR: Process (%ws) allowed.\n", createInfo->CommandLine->Buffer);
+    if (createInfo != NULL && createInfo->ImageFileName != NULL) {
+        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,
+            "MyProcessMonitor: PID %d is launching '%wZ'\n",
+            (ULONG)(ULONG_PTR)pid,
+            createInfo->ImageFileName);
             createInfo->CreationStatus = STATUS_SUCCESS;
-        }
-        else if (wcsstr(createInfo->CommandLine->Buffer, L"mimikatz") != NULL) {
-            DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL,
-                "MyDumbEDR: Process (%ws) denied.\n", createInfo->CommandLine->Buffer);
-            createInfo->CreationStatus = STATUS_ACCESS_DENIED;
-        }
+    }
+    else {
+        // Process is terminating
+        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,
+            "MyProcessMonitor: PID %d terminated.\n", (ULONG)(ULONG_PTR)pid);
     }
 }
-
 // Unload routine
 void UnloadMyDumbEDR(_In_ PDRIVER_OBJECT DriverObject) {
-    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "MyFirstDriver: Unloading routine called\n");
+    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "MyProcessMonitor: Unloading routine called\n");
 
     // Unregister callback
     PsSetCreateProcessNotifyRoutineEx(CreateProcessNotifyRoutine, TRUE);
@@ -39,71 +38,75 @@ void UnloadMyDumbEDR(_In_ PDRIVER_OBJECT DriverObject) {
     // Delete device object
     IoDeleteDevice(DriverObject->DeviceObject);
 }
-
-// Default unsupported IRP handler
 NTSTATUS MyUnsupportedFunction(PDEVICE_OBJECT DeviceObject, PIRP Irp) {
-    UNREFERENCED_PARAMETER(DeviceObject);
     Irp->IoStatus.Status = STATUS_NOT_SUPPORTED;
     Irp->IoStatus.Information = 0;
     IoCompleteRequest(Irp, IO_NO_INCREMENT);
+    UNREFERENCED_PARAMETER(DeviceObject);
+
     return STATUS_NOT_SUPPORTED;
 }
 
-// Entry point
+
 NTSTATUS DriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING RegistryPath) {
-    UNREFERENCED_PARAMETER(RegistryPath);
 
-    NTSTATUS status;
-    PDEVICE_OBJECT DeviceObject;
-    UNICODE_STRING deviceName = DEVICE_NAME;
-    UNICODE_STRING symlinkName = SYM_LINK;
 
-    // Assign default handler for all IRPs
     for (int i = 0; i <= IRP_MJ_MAXIMUM_FUNCTION; i++) {
         DriverObject->MajorFunction[i] = MyUnsupportedFunction;
     }
 
-    // Create the device
+    // Prevent compiler error in level 4 warnings
+    UNREFERENCED_PARAMETER(RegistryPath);
+
+    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "MyProcessMonitor: Initializing the driver\n");
+
+    // Variable that will store the output of WinAPI functions
+    NTSTATUS status;
+
+    // Initializing a device object and creating it
+    PDEVICE_OBJECT DeviceObject;
+    UNICODE_STRING deviceName = DEVICE_NAME;
+    UNICODE_STRING symlinkName = SYM_LINK;
     status = IoCreateDevice(
-        DriverObject,
-        0,
-        &deviceName,
-        FILE_DEVICE_UNKNOWN,
-        0,
-        FALSE,
-        &DeviceObject
+        DriverObject,		    // Our driver object
+        0,					    // Extra bytes needed (we don't need any)
+        &deviceName,            // The device name
+        FILE_DEVICE_UNKNOWN,    // The device type
+        0,					    // Device characteristics (none)
+        FALSE,				    // Sets the driver to not exclusive
+        &DeviceObject		    // Pointer in which is stored the result of IoCreateDevice
     );
 
     if (!NT_SUCCESS(status)) {
-        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL,
-            "MyFirstDriver: Device creation failed: 0x%X\n", status);
+        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "MyProcessMonitor: Device creation failed: 0x%X\n", status);
         return status;
     }
 
-    // Create the symbolic link
-    status = IoCreateSymbolicLink(&symlinkName, &deviceName);
+    // Creating the symlink that we will use to contact our driver
+    status = IoCreateSymbolicLink(
+        &symlinkName, // The symbolic link name
+        &deviceName   // The device name
+    );
+
     if (!NT_SUCCESS(status)) {
-        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL,
-            "MyFirstDriver: Symlink creation failed: 0x%X\n", status);
+        DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "MyProcessMonitor: Symlink creation failed\n");
         IoDeleteDevice(DeviceObject);
         return status;
     }
 
-    // Set the unload routine
-    DriverObject->DriverUnload = UnloadMyDumbEDR;
+    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "MyProcessMonitor: successfully initialized the driver\n");
 
+    // Setting the unload routine to execute
+    DriverObject->DriverUnload = UnloadMyDumbEDR;
     // Register the process creation callback
     status = PsSetCreateProcessNotifyRoutineEx(CreateProcessNotifyRoutine, FALSE);
     if (!NT_SUCCESS(status)) {
         DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL,
-            "MyFirstDriver: Failed to register process notify routine: 0x%X\n", status);
+            "MyProcessMonitor: Failed to register process notify routine: 0x%X\n", status);
         IoDeleteSymbolicLink(&symlinkName);
         IoDeleteDevice(DeviceObject);
         return status;
     }
 
-    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,
-        "MyFirstDriver: Successfully initialized the driver\n");
-
-    return STATUS_SUCCESS;
+    return status;
 }
