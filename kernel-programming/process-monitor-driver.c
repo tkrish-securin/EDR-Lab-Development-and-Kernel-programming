@@ -27,6 +27,8 @@ void CreateProcessNotifyRoutine(HANDLE ppid, HANDLE pid, BOOLEAN create) {
 
 void UnloadMyDumbEDR(_In_ PDRIVER_OBJECT DriverObject) {
     DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "MyFirstDriver: Unloading routine called\n");
+     // Unset the callback
+    PsSetCreateProcessNotifyRoutineEx(CreateProcessNotifyRoutine, TRUE);
     // Delete the driver device 
     IoDeleteDevice(DriverObject->DeviceObject);
     // Delete the symbolic link
