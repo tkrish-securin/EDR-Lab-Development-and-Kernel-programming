@@ -17,7 +17,7 @@ void CreateProcessNotifyRoutine(PEPROCESS process, HANDLE pid, PPS_CREATE_NOTIFY
             "MyProcessMonitor: PID %d is launching '%wZ'\n",
             (ULONG)(ULONG_PTR)pid,
             createInfo->ImageFileName);
-            createInfo->CreationStatus = STATUS_SUCCESS;
+        createInfo->CreationStatus = STATUS_SUCCESS;
     }
     else {
         // Process is terminating
@@ -108,5 +108,5 @@ NTSTATUS DriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING Regi
         return status;
     }
 
-    return status;
+    return STATUS_SUCCESS;
 }
